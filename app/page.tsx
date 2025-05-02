@@ -3,276 +3,262 @@
 import { useState, useEffect } from "react"
 import Image from "next/image"
 import {
-  ChevronLeft,
-  ChevronRight,
-  Plus,
-  Menu,
-  Clock,
-  X,
-  LogIn,
-  LogOut,
-  CalendarIcon,
-  Trash2,
-  Phone,
-  User,
-  Check,
-  Calendar,
+    ChevronLeft,
+    ChevronRight,
+    Plus,
+    Menu,
+    Clock,
+    X,
+    LogIn,
+    LogOut,
+    CalendarIcon,
+    Trash2,
+    Phone,
+    User,
+    Check,
+    Calendar,
 } from "lucide-react"
+import { initializeApp } from "firebase/app"
+import {
+    getFirestore,
+    collection,
+    addDoc,
+    onSnapshot,
+    query,
+    doc,
+    deleteDoc,
+    Timestamp
+} from "firebase/firestore"
+
+// Firebase configuration
+const firebaseConfig = {
+    apiKey: "AIzaSyD9WbJ67hoqHik3qrvPBEddWRNafM5rDHY",
+    authDomain: "frizerie-9249d.firebaseapp.com",
+    projectId: "frizerie-9249d",
+    storageBucket: "frizerie-9249d.firebasestorage.app",
+    messagingSenderId: "155604046795",
+    appId: "1:155604046795:web:9db2174eca88614e4c9c4e"
+}
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig)
+const db = getFirestore(app)
 
 export default function Home() {
-  const [isLoaded, setIsLoaded] = useState(false)
-  const [isAdmin, setIsAdmin] = useState(false)
-  const [showLoginModal, setShowLoginModal] = useState(false)
-  const [password, setPassword] = useState("")
-  const [loginError, setLoginError] = useState("")
-  const [currentView, setCurrentView] = useState("week")
-  const [selectedEvent, setSelectedEvent] = useState(null)
-  const [showAddEventModal, setShowAddEventModal] = useState(false)
-  const [showBookingModal, setShowBookingModal] = useState(false)
-  const [selectedSlot, setSelectedSlot] = useState(null)
-  const [availableSlots, setAvailableSlots] = useState([])
+    const [isLoaded, setIsLoaded] = useState(false)
+    const [isAdmin, setIsAdmin] = useState(false)
+    const [showLoginModal, setShowLoginModal] = useState(false)
+    const [password, setPassword] = useState("")
+    const [loginError, setLoginError] = useState("")
+    const [currentView, setCurrentView] = useState("week")
+    const [selectedEvent, setSelectedEvent] = useState(null)
+    const [showAddEventModal, setShowAddEventModal] = useState(false)
+    const [showBookingModal, setShowBookingModal] = useState(false)
+    const [selectedSlot, setSelectedSlot] = useState(null)
+    const [availableSlots, setAvailableSlots] = useState([])
 
-  // Booking form state
-  const [bookingForm, setBookingForm] = useState({
-    firstName: "",
-    lastName: "",
-    phone: "",
-  })
+    // Booking form state
+    const [bookingForm, setBookingForm] = useState({
+        firstName: "",
+        lastName: "",
+        phone: "",
+    })
 
-  // Date state
-  const [currentDate, setCurrentDate] = useState(new Date())
-  const [selectedDate, setSelectedDate] = useState(new Date())
+    // Date state
+    const [currentDate, setCurrentDate] = useState(new Date())
+    const [selectedDate, setSelectedDate] = useState(new Date())
 
-  // New event state with simplified fields
-  const [newEvent, setNewEvent] = useState({
-    title: "Interval Disponibil",
-    startTime: "09:00",
-    endTime: "17:00",
-    startDate: new Date().toISOString().split("T")[0],
-    endDate: new Date().toISOString().split("T")[0],
-    type: "admin-available", // admin-available, booked
-  })
+    // New event state with simplified fields
+    const [newEvent, setNewEvent] = useState({
+        title: "Interval Disponibil",
+        startTime: "09:00",
+        endTime: "17:00",
+        startDate: new Date().toISOString().split("T")[0],
+        endDate: new Date().toISOString().split("T")[0],
+        type: "admin-available",
+    })
 
-  // State for events
-  const [events, setEvents] = useState([
-    {
-      id: 1,
-      title: "Program Disponibil",
-      startTime: "09:00",
-      endTime: "17:00",
-      startDate: "2025-03-03",
-      endDate: "2025-03-03",
-      color: "bg-green-500",
-      type: "admin-available",
-    },
-    {
-      id: 3,
-      title: "Programare: John Doe",
-      startTime: "14:00",
-      endTime: "15:00",
-      startDate: "2025-03-03",
-      endDate: "2025-03-03",
-      color: "bg-purple-500",
-      type: "booked",
-      clientInfo: {
-        firstName: "John",
-        lastName: "Doe",
-        phone: "0712345678",
-      },
-    },
-  ])
+    // State for events
+    const [events, setEvents] = useState([])
 
-  // Admin password - in a real app, this would be handled securely on the server
-  const ADMIN_PASSWORD = "admin123"
+    // Admin password
+    const ADMIN_PASSWORD = "admin123"
 
-  // Load events from localStorage on initial load
-  useEffect(() => {
-    setIsLoaded(true)
-    const savedEvents = localStorage.getItem("calendarEvents")
-    if (savedEvents) {
-      try {
-        setEvents(JSON.parse(savedEvents))
-      } catch (e) {
-        console.error("Error loading saved events:", e)
-      }
-    }
-  }, [])
-
-  // Save events to localStorage whenever they change
-  useEffect(() => {
-    if (events.length > 0) {
-      localStorage.setItem("calendarEvents", JSON.stringify(events))
-    }
-  }, [events])
-
-  // Generate available slots when an admin-available event is clicked
-  useEffect(() => {
-    if (selectedEvent && selectedEvent.type === "admin-available" && !isAdmin) {
-      generateAvailableSlots(selectedEvent)
-    }
-  }, [selectedEvent])
-
-  const handleLogin = () => {
-    if (password === ADMIN_PASSWORD) {
-      setIsAdmin(true)
-      setShowLoginModal(false)
-      setLoginError("")
-      setPassword("")
-    } else {
-      setLoginError("Parolă incorectă")
-    }
-  }
-
-  const handleLogout = () => {
-    setIsAdmin(false)
-  }
-
-  const handleEventClick = (event) => {
-    // If the event is an admin-available slot and user is not admin, show available slots
-    if (event.type === "admin-available" && !isAdmin) {
-      setSelectedEvent(event)
-    } else {
-      setSelectedEvent(event)
-    }
-  }
-
-  // Generate 1-hour slots from admin's available hours
-  const generateAvailableSlots = (availableBlock) => {
-    const slots = []
-    const startHour = Number.parseInt(availableBlock.startTime.split(":")[0])
-    const endHour = Number.parseInt(availableBlock.endTime.split(":")[0])
-
-    // Check which slots are already booked
-    const bookedSlots = events.filter(
-      (event) => event.type === "booked" && event.startDate === availableBlock.startDate,
-    )
-
-    for (let hour = startHour; hour < endHour; hour++) {
-      const startTime = `${hour.toString().padStart(2, "0")}:00`
-      const endTime = `${(hour + 1).toString().padStart(2, "0")}:00`
-
-      // Check if this slot is already booked
-      const isBooked = bookedSlots.some((booking) => booking.startTime === startTime && booking.endTime === endTime)
-
-      if (!isBooked) {
-        slots.push({
-          startTime,
-          endTime,
-          startDate: availableBlock.startDate,
-          endDate: availableBlock.endDate,
-          parentId: availableBlock.id,
+    // Load events from Firestore on initial load
+    useEffect(() => {
+        setIsLoaded(true)
+        const q = query(collection(db, "events"))
+        const unsubscribe = onSnapshot(q, (querySnapshot) => {
+            const loadedEvents = []
+            querySnapshot.forEach((doc) => {
+                const data = doc.data()
+                // Convert Firestore Timestamps to Date objects
+                loadedEvents.push({
+                    id: doc.id,
+                    title: data.title,
+                    startTime: data.startTime,
+                    endTime: data.endTime,
+                    startDate: data.startDate.toDate().toISOString().split("T")[0],
+                    endDate: data.endDate.toDate().toISOString().split("T")[0],
+                    color: data.color,
+                    type: data.type,
+                    clientInfo: data.clientInfo || null,
+                    createdAt: data.createdAt.toDate()
+                })
+            })
+            setEvents(loadedEvents)
         })
-      }
+
+        return () => unsubscribe()
+    }, [])
+
+    const handleLogin = () => {
+        if (password === ADMIN_PASSWORD) {
+            setIsAdmin(true)
+            setShowLoginModal(false)
+            setLoginError("")
+            setPassword("")
+        } else {
+            setLoginError("Parolă incorectă")
+        }
     }
 
-    setAvailableSlots(slots)
-  }
-
-  const handleAddEvent = () => {
-    if (!isAdmin) return
-    if (!newEvent.title) {
-      alert("Te rugăm să adaugi un titlu pentru eveniment")
-      return
+    const handleLogout = () => {
+        setIsAdmin(false)
     }
 
-    // Validate dates
-    const startDate = new Date(newEvent.startDate)
-    const endDate = new Date(newEvent.endDate)
-    if (endDate < startDate) {
-      alert("Data de sfârșit nu poate fi înainte de data de început")
-      return
+    const handleEventClick = (event) => {
+        if (event.type === "admin-available" && !isAdmin) {
+            setSelectedEvent(event)
+        } else {
+            setSelectedEvent(event)
+        }
     }
 
-    // Generate a unique ID for the event
-    const eventId = Math.floor(Math.random() * 10000)
+    const generateAvailableSlots = (availableBlock) => {
+        const slots = []
+        const startHour = Number.parseInt(availableBlock.startTime.split(":")[0])
+        const endHour = Number.parseInt(availableBlock.endTime.split(":")[0])
 
-    // Set color based on event type
-    const color = "bg-green-500" // default for admin-available events
+        const bookedSlots = events.filter(
+            (event) => event.type === "booked" && event.startDate === availableBlock.startDate,
+        )
 
-    // Create the event
-    const eventToAdd = {
-      id: eventId,
-      title: newEvent.title,
-      startTime: newEvent.startTime,
-      endTime: newEvent.endTime,
-      startDate: newEvent.startDate,
-      endDate: newEvent.endDate,
-      color: color,
-      type: newEvent.type,
+        for (let hour = startHour; hour < endHour; hour++) {
+            const startTime = `${hour.toString().padStart(2, "0")}:00`
+            const endTime = `${(hour + 1).toString().padStart(2, "0")}:00`
+
+            const isBooked = bookedSlots.some((booking) => booking.startTime === startTime && booking.endTime === endTime)
+
+            if (!isBooked) {
+                slots.push({
+                    startTime,
+                    endTime,
+                    startDate: availableBlock.startDate,
+                    endDate: availableBlock.endDate,
+                    parentId: availableBlock.id,
+                })
+            }
+        }
+
+        setAvailableSlots(slots)
     }
 
-    setEvents([...events, eventToAdd])
-    setShowAddEventModal(false)
+    const handleAddEvent = async () => {
+        if (!isAdmin) return
+        if (!newEvent.title) {
+            alert("Te rugăm să adaugi un titlu pentru eveniment")
+            return
+        }
 
-    // Reset form
-    setNewEvent({
-      title: "Interval Disponibil",
-      startTime: "09:00",
-      endTime: "17:00",
-      startDate: new Date().toISOString().split("T")[0],
-      endDate: new Date().toISOString().split("T")[0],
-      type: "admin-available",
-    })
-  }
+        const startDate = new Date(newEvent.startDate)
+        const endDate = new Date(newEvent.endDate)
+        if (endDate < startDate) {
+            alert("Data de sfârșit nu poate fi înainte de data de început")
+            return
+        }
 
-  const handleDeleteEvent = (eventId) => {
-    if (!isAdmin) return
-    const updatedEvents = events.filter((event) => event.id !== eventId)
-    setEvents(updatedEvents)
-    localStorage.setItem("calendarEvents", JSON.stringify(updatedEvents))
-    setSelectedEvent(null)
-  }
+        try {
+            await addDoc(collection(db, "events"), {
+                title: newEvent.title,
+                startTime: newEvent.startTime,
+                endTime: newEvent.endTime,
+                startDate: Timestamp.fromDate(startDate),
+                endDate: Timestamp.fromDate(endDate),
+                color: "bg-green-500",
+                type: newEvent.type,
+                createdAt: Timestamp.fromDate(new Date())
+            })
 
-  const handleSelectTimeSlot = (slot) => {
-    setSelectedSlot(slot)
-    setShowBookingModal(true)
-    setSelectedEvent(null)
-  }
-
-  const handleBookSlot = () => {
-    // Validate form
-    if (!bookingForm.firstName || !bookingForm.lastName || !bookingForm.phone) {
-      alert("Te rugăm să completezi toate câmpurile")
-      return
+            setShowAddEventModal(false)
+            setNewEvent({
+                title: "Interval Disponibil",
+                startTime: "09:00",
+                endTime: "17:00",
+                startDate: new Date().toISOString().split("T")[0],
+                endDate: new Date().toISOString().split("T")[0],
+                type: "admin-available",
+            })
+        } catch (error) {
+            console.error("Error adding document: ", error)
+            alert("A apărut o eroare la salvarea evenimentului")
+        }
     }
 
-    // Generate a unique ID for the event
-    const eventId = Math.floor(Math.random() * 10000)
-
-    // Create a new booked event based on the selected slot
-    const bookedEvent = {
-      id: eventId,
-      title: `Programare: ${bookingForm.firstName} ${bookingForm.lastName}`,
-      startTime: selectedSlot.startTime,
-      endTime: selectedSlot.endTime,
-      startDate: selectedSlot.startDate,
-      endDate: selectedSlot.endDate,
-      color: "bg-purple-500",
-      type: "booked",
-      clientInfo: {
-        firstName: bookingForm.firstName,
-        lastName: bookingForm.lastName,
-        phone: bookingForm.phone,
-      },
+    const handleDeleteEvent = async (eventId) => {
+        if (!isAdmin) return
+        try {
+            await deleteDoc(doc(db, "events", eventId))
+            setSelectedEvent(null)
+        } catch (error) {
+            console.error("Error deleting document: ", error)
+            alert("A apărut o eroare la ștergerea evenimentului")
+        }
     }
 
-    // Add the booked event
-    const updatedEvents = [...events, bookedEvent]
-    setEvents(updatedEvents)
-    localStorage.setItem("calendarEvents", JSON.stringify(updatedEvents))
+    const handleSelectTimeSlot = (slot) => {
+        setSelectedSlot(slot)
+        setShowBookingModal(true)
+        setSelectedEvent(null)
+    }
 
-    // Reset and close
-    setShowBookingModal(false)
-    setSelectedSlot(null)
-    setBookingForm({
-      firstName: "",
-      lastName: "",
-      phone: "",
-    })
+    const handleBookSlot = async () => {
+        if (!bookingForm.firstName || !bookingForm.lastName || !bookingForm.phone) {
+            alert("Te rugăm să completezi toate câmpurile")
+            return
+        }
 
-    // Show confirmation
-    alert("Programare confirmată! Mulțumim.")
-  }
+        try {
+            await addDoc(collection(db, "events"), {
+                title: `Programare: ${bookingForm.firstName} ${bookingForm.lastName}`,
+                startTime: selectedSlot.startTime,
+                endTime: selectedSlot.endTime,
+                startDate: Timestamp.fromDate(new Date(selectedSlot.startDate)),
+                endDate: Timestamp.fromDate(new Date(selectedSlot.endDate)),
+                color: "bg-purple-500",
+                type: "booked",
+                clientInfo: {
+                    firstName: bookingForm.firstName,
+                    lastName: bookingForm.lastName,
+                    phone: bookingForm.phone,
+                },
+                createdAt: Timestamp.fromDate(new Date())
+            })
+
+            setShowBookingModal(false)
+            setSelectedSlot(null)
+            setBookingForm({
+                firstName: "",
+                lastName: "",
+                phone: "",
+            })
+
+            alert("Programare confirmată! Mulțumim.")
+        } catch (error) {
+            console.error("Error booking slot: ", error)
+            alert("A apărut o eroare la salvarea programării")
+        }
+    }
 
   // Get a random color for events
   const getRandomColor = () => {
