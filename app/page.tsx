@@ -20,8 +20,10 @@ import {
     Upload,
     Download,
     RefreshCw,
-    Globe,
+    Database,
 } from "lucide-react"
+import { db } from "./firebase"
+import { collection, addDoc, deleteDoc, doc, getDocs, query, orderBy, onSnapshot } from "firebase/firestore"
 
 // Definim tipurile pentru datele noastre
 type ClientInfo = {
@@ -53,11 +55,14 @@ type TimeSlot = {
     parentId: string
 }
 
-// Chei pentru localStorage
+// Colecția Firestore
+const EVENTS_COLLECTION = "events"
+
+// Define storage keys
 const STORAGE_KEYS = {
-    EVENTS: "calendarEvents",
-    LAST_UPDATE: "calendarLastUpdate",
-    SYNC_COUNTER: "calendarSyncCounter",
+    EVENTS: "calendar_events",
+    LAST_UPDATE: "last_update_time",
+    SYNC_COUNTER: "sync_counter",
 }
 
 export default function Home() {
@@ -73,17 +78,20 @@ export default function Home() {
     const [selectedSlot, setSelectedSlot] = useState<TimeSlot | null>(null)
     const [availableSlots, setAvailableSlots] = useState<TimeSlot[]>([])
     const [isDataLoading, setIsDataLoading] = useState(false)
-    const [lastUpdateTime, setLastUpdateTime] = useState<string>(new Date().toISOString())
     const [syncStatus, setSyncStatus] = useState<"synced" | "syncing" | "error">("synced")
     const [sessionId] = useState(() => Math.random().toString(36).substring(2, 15))
     const [syncEnabled, setSyncEnabled] = useState(true)
     const [syncInterval, setSyncInterval] = useState(5000) // 5 secunde implicit
+    const [lastUpdateTime, setLastUpdateTime] = useState<string>(new Date().toISOString())
 
     // Referință pentru intervalul de polling
     const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
     // Referință pentru a ține minte ultima dată când am verificat actualizările
     const lastCheckRef = useRef<string>(new Date().toISOString())
+
+    // Referință pentru unsubscribe de la Firestore listener
+    const unsubscribeRef = useRef<() => void | null>()
 
     // Booking form state
     const [bookingForm, setBookingForm] = useState({
@@ -107,59 +115,64 @@ export default function Home() {
     })
 
     // State for events
-    const [events, setEvents] = useState<Event[]>([
-        {
-            id: "1",
-            title: "Program Disponibil",
-            startTime: "09:00",
-            endTime: "17:00",
-            startDate: "2025-03-03",
-            endDate: "2025-03-03",
-            color: "bg-green-500",
-            type: "admin-available",
-            createdAt: new Date().toISOString(),
-            lastUpdated: new Date().toISOString(),
-        },
-        {
-            id: "3",
-            title: "Programare: John Doe",
-            startTime: "14:00",
-            endTime: "15:00",
-            startDate: "2025-03-03",
-            endDate: "2025-03-03",
-            color: "bg-purple-500",
-            type: "booked",
-            clientInfo: {
-                firstName: "John",
-                lastName: "Doe",
-                phone: "0712345678",
-            },
-            createdAt: new Date().toISOString(),
-            lastUpdated: new Date().toISOString(),
-        },
-    ])
+    const [events, setEvents] = useState<Event[]>([])
 
     // Admin password - in a real app, this would be handled securely on the server
     const ADMIN_PASSWORD = "admin123"
 
     // Inițializăm polling-ul și încărcăm evenimentele la încărcarea paginii
     useEffect(() => {
-        // Încărcăm evenimentele din localStorage
-        loadEvents()
+        // Încărcăm evenimentele din Firestore și setăm un listener pentru actualizări
+        setIsDataLoading(true)
+
+        // Creăm un query pentru a obține toate evenimentele, ordonate după data de creare
+        const eventsQuery = query(collection(db, EVENTS_COLLECTION), orderBy("createdAt", "desc"))
+
+        // Setăm un listener pentru actualizări în timp real
+        const unsubscribe = onSnapshot(
+            eventsQuery,
+            (snapshot) => {
+                const eventsData: Event[] = []
+                snapshot.forEach((doc) => {
+                    const data = doc.data()
+                    eventsData.push({
+                        id: doc.id,
+                        title: data.title,
+                        startTime: data.startTime,
+                        endTime: data.endTime,
+                        startDate: data.startDate,
+                        endDate: data.endDate,
+                        color: data.color,
+                        type: data.type,
+                        clientInfo: data.clientInfo,
+                        createdAt: data.createdAt,
+                        lastUpdated: data.lastUpdated,
+                    })
+                })
+                setEvents(eventsData)
+                setIsDataLoading(false)
+                setSyncStatus("synced")
+            },
+            (error) => {
+                console.error("Error fetching events:", error)
+                setIsDataLoading(false)
+                setSyncStatus("error")
+            },
+        )
+
+        // Salvăm referința pentru a putea face unsubscribe la demontare
+        unsubscribeRef.current = unsubscribe
+
+        // Verificăm dacă există evenimente în colecție
+        checkAndInitializeEvents()
+
         setIsLoaded(true)
-
-        // Pornim polling-ul
-        startPolling()
-
-        // Adăugăm un event listener pentru storage events (când alte tab-uri modifică localStorage)
-        window.addEventListener("storage", handleStorageChange)
 
         // Curățăm la demontarea componentei
         return () => {
-            if (pollingIntervalRef.current) {
-                clearInterval(pollingIntervalRef.current)
+            if (unsubscribeRef.current) {
+                unsubscribeRef.current()
             }
-            window.removeEventListener("storage", handleStorageChange)
         }
     }, [])
 
@@ -273,10 +286,79 @@ export default function Home() {
         }
     }
 
+    // Verificăm dacă există evenimente în colecție și inițializăm cu date de exemplu dacă nu există
+    const checkAndInitializeEvents = async () => {
+        try {
+            const eventsSnapshot = await getDocs(collection(db, EVENTS_COLLECTION))
+
+            // Dacă nu există evenimente, adăugăm câteva exemple
+            if (eventsSnapshot.empty) {
+                const timestamp = new Date().toISOString()
+
+                // Adăugăm un eveniment de disponibilitate
+                await addDoc(collection(db, EVENTS_COLLECTION), {
+                    title: "Program Disponibil",
+                    startTime: "09:00",
+                    endTime: "17:00",
+                    startDate: "2025-03-03",
+                    endDate: "2025-03-03",
+                    color: "bg-green-500",
+                    type: "admin-available",
+                    createdAt: timestamp,
+                    lastUpdated: timestamp,
+                })
+
+                // Adăugăm un eveniment de programare
+                await addDoc(collection(db, EVENTS_COLLECTION), {
+                    title: "Programare: John Doe",
+                    startTime: "14:00",
+                    endTime: "15:00",
+                    startDate: "2025-03-03",
+                    endDate: "2025-03-03",
+                    color: "bg-purple-500",
+                    type: "booked",
+                    clientInfo: {
+                        firstName: "John",
+                        lastName: "Doe",
+                        phone: "0712345678",
+                    },
+                    createdAt: timestamp,
+                    lastUpdated: timestamp,
+                })
+            }
+        } catch (error) {
+            console.error("Error checking and initializing events:", error)
+        }
+    }
+
     // Forțăm reîncărcarea datelor
-    const forceRefresh = () => {
+    const forceRefresh = async () => {
         setSyncStatus("syncing")
-        loadEvents()
+        try {
+            const eventsSnapshot = await getDocs(collection(db, EVENTS_COLLECTION))
+            const eventsData: Event[] = []
+            eventsSnapshot.forEach((doc) => {
+                const data = doc.data()
+                eventsData.push({
+                    id: doc.id,
+                    title: data.title,
+                    startTime: data.startTime,
+                    endTime: data.endTime,
+                    startDate: data.startDate,
+                    endDate: data.endDate,
+                    color: data.color,
+                    type: data.type,
+                    clientInfo: data.clientInfo,
+                    createdAt: data.createdAt,
+                    lastUpdated: data.lastUpdated,
+                })
+            })
+            setEvents(eventsData)
+            setSyncStatus("synced")
+        } catch (error) {
+            console.error("Error refreshing events:", error)
+            setSyncStatus("error")
+        }
     }
 
     // Activăm/dezactivăm sincronizarea
@@ -311,29 +393,40 @@ export default function Home() {
     }
 
     // Import events from JSON file
-    const importEvents = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const importEvents = async (event: React.ChangeEvent<HTMLInputElement>) => {
         if (!isAdmin || !event.target.files || event.target.files.length === 0) return
 
         const file = event.target.files[0]
         const reader = new FileReader()
 
-        reader.onload = (e) => {
+        reader.onload = async (e) => {
             try {
+                setSyncStatus("syncing")
                 const importedEvents = JSON.parse(e.target?.result as string) as Event[]
 
-                // Adăugăm timestamp-uri dacă lipsesc
-                const processedEvents = importedEvents.map((event) => ({
-                    ...event,
-                    createdAt: event.createdAt || new Date().toISOString(),
-                    lastUpdated: event.lastUpdated || new Date().toISOString(),
-                }))
+                // Adăugăm fiecare eveniment în Firestore
+                for (const event of importedEvents) {
+                    const timestamp = new Date().toISOString()
 
-                setEvents(processedEvents)
-                saveEvents(processedEvents) // Salvăm și notificăm alte ferestre
+                    await addDoc(collection(db, EVENTS_COLLECTION), {
+                        title: event.title,
+                        startTime: event.startTime,
+                        endTime: event.endTime,
+                        startDate: event.startDate,
+                        endDate: event.endDate,
+                        color: event.color || getRandomColor(),
+                        type: event.type,
+                        clientInfo: event.clientInfo,
+                        createdAt: event.createdAt || timestamp,
+                        lastUpdated: timestamp,
+                    })
+                }
 
+                setSyncStatus("synced")
                 alert("Evenimentele au fost importate cu succes!")
             } catch (error) {
                 console.error("Error importing events:", error)
+                setSyncStatus("error")
                 alert("A apărut o eroare la importarea evenimentelor.")
             }
         }
@@ -397,7 +490,7 @@ export default function Home() {
         setAvailableSlots(slots)
     }
 
-    const handleAddEvent = () => {
+    const handleAddEvent = async () => {
         if (!isAdmin) return
         if (!newEvent.title) {
             alert("Te rugăm să adaugi un titlu pentru eveniment")
@@ -414,51 +507,54 @@ export default function Home() {
 
         setSyncStatus("syncing")
 
-        // Generate a unique ID for the event
-        const eventId = `event_${Date.now()}_${Math.floor(Math.random() * 1000)}`
-        const timestamp = new Date().toISOString()
+        try {
+            const timestamp = new Date().toISOString()
 
-        // Create the event
-        const eventToAdd: Event = {
-            id: eventId,
-            title: newEvent.title,
-            startTime: newEvent.startTime,
-            endTime: newEvent.endTime,
-            startDate: newEvent.startDate,
-            endDate: newEvent.endDate,
-            color: "bg-green-500",
-            type: newEvent.type,
-            createdAt: timestamp,
-            lastUpdated: timestamp,
+            // Create the event in Firestore
+            await addDoc(collection(db, EVENTS_COLLECTION), {
+                title: newEvent.title,
+                startTime: newEvent.startTime,
+                endTime: newEvent.endTime,
+                startDate: newEvent.startDate,
+                endDate: newEvent.endDate,
+                color: "bg-green-500",
+                type: newEvent.type,
+                createdAt: timestamp,
+                lastUpdated: timestamp,
+            })
+
+            setShowAddEventModal(false)
+
+            // Reset form
+            setNewEvent({
+                title: "Interval Disponibil",
+                startTime: "09:00",
+                endTime: "17:00",
+                startDate: new Date().toISOString().split("T")[0],
+                endDate: new Date().toISOString().split("T")[0],
+                type: "admin-available",
+            })
+        } catch (error) {
+            console.error("Error adding event:", error)
+            setSyncStatus("error")
+            alert("A apărut o eroare la adăugarea evenimentului.")
         }
-
-        const updatedEvents = [...events, eventToAdd]
-        setEvents(updatedEvents)
-        saveEvents(updatedEvents)
-
-        setShowAddEventModal(false)
-
-        // Reset form
-        setNewEvent({
-            title: "Interval Disponibil",
-            startTime: "09:00",
-            endTime: "17:00",
-            startDate: new Date().toISOString().split("T")[0],
-            endDate: new Date().toISOString().split("T")[0],
-            type: "admin-available",
-        })
     }
 
-    const handleDeleteEvent = (eventId: string) => {
+    const handleDeleteEvent = async (eventId: string) => {
         if (!isAdmin) return
 
         setSyncStatus("syncing")
 
-        const updatedEvents = events.filter((event) => event.id !== eventId)
-        setEvents(updatedEvents)
-        saveEvents(updatedEvents)
-
-        setSelectedEvent(null)
+        try {
+            // Delete the event from Firestore
+            await deleteDoc(doc(db, EVENTS_COLLECTION, eventId))
+            setSelectedEvent(null)
+        } catch (error) {
+            console.error("Error deleting event:", error)
+            setSyncStatus("error")
+            alert("A apărut o eroare la ștergerea evenimentului.")
+        }
     }
 
     const handleSelectTimeSlot = (slot: TimeSlot) => {
@@ -467,7 +563,7 @@ export default function Home() {
         setSelectedEvent(null)
     }
 
-    const handleBookSlot = () => {
+    const handleBookSlot = async () => {
         // Validate form
         if (!bookingForm.firstName || !bookingForm.lastName || !bookingForm.phone) {
             alert("Te rugăm să completezi toate câmpurile")
@@ -478,45 +574,43 @@ export default function Home() {
 
         setSyncStatus("syncing")
 
-        // Generate a unique ID for the event
-        const eventId = `booking_${Date.now()}_${Math.floor(Math.random() * 1000)}`
-        const timestamp = new Date().toISOString()
+        try {
+            const timestamp = new Date().toISOString()
 
-        // Create a new booked event based on the selected slot
-        const bookedEvent: Event = {
-            id: eventId,
-            title: `Programare: ${bookingForm.firstName} ${bookingForm.lastName}`,
-            startTime: selectedSlot.startTime,
-            endTime: selectedSlot.endTime,
-            startDate: selectedSlot.startDate,
-            endDate: selectedSlot.endDate,
-            color: "bg-purple-500",
-            type: "booked",
-            clientInfo: {
-                firstName: bookingForm.firstName,
-                lastName: bookingForm.lastName,
-                phone: bookingForm.phone,
-            },
-            createdAt: timestamp,
-            lastUpdated: timestamp,
+            // Create a new booked event in Firestore
+            await addDoc(collection(db, EVENTS_COLLECTION), {
+                title: `Programare: ${bookingForm.firstName} ${bookingForm.lastName}`,
+                startTime: selectedSlot.startTime,
+                endTime: selectedSlot.endTime,
+                startDate: selectedSlot.startDate,
+                endDate: selectedSlot.endDate,
+                color: "bg-purple-500",
+                type: "booked",
+                clientInfo: {
+                    firstName: bookingForm.firstName,
+                    lastName: bookingForm.lastName,
+                    phone: bookingForm.phone,
+                },
+                createdAt: timestamp,
+                lastUpdated: timestamp,
+            })
+
+            // Reset and close
+            setShowBookingModal(false)
+            setSelectedSlot(null)
+            setBookingForm({
+                firstName: "",
+                lastName: "",
+                phone: "",
+            })
+
+            // Show confirmation
+            alert("Programare confirmată! Mulțumim.")
+        } catch (error) {
+            console.error("Error booking slot:", error)
+            setSyncStatus("error")
+            alert("A apărut o eroare la efectuarea programării.")
         }
-
-        // Add the booked event
-        const updatedEvents = [...events, bookedEvent]
-        setEvents(updatedEvents)
-        saveEvents(updatedEvents)
-
-        // Reset and close
-        setShowBookingModal(false)
-        setSelectedSlot(null)
-        setBookingForm({
-            firstName: "",
-            lastName: "",
-            phone: "",
-        })
-
-        // Show confirmation
-        alert("Programare confirmată! Mulțumim.")
     }
 
     // Get a random color for events
@@ -760,15 +854,11 @@ export default function Home() {
                             </span>
                         </button>
 
-                        {/* Sync Toggle */}
-                        <button
-                            onClick={toggleSync}
-                            className={`flex items-center gap-1 px-3 py-1 ${syncEnabled ? "bg-green-500/70" : "bg-red-500/70"} backdrop-blur-sm rounded-full text-white hover:bg-opacity-80 transition-colors`}
-                            title={syncEnabled ? "Dezactivează sincronizarea" : "Activează sincronizarea"}
-                        >
-                            <Globe className="h-3 w-3" />
-                            <span className="text-xs">{syncEnabled ? "Sincronizare activă" : "Sincronizare inactivă"}</span>
-                        </button>
+                        {/* Firebase Indicator */}
+                        <div className="flex items-center gap-1 px-3 py-1 bg-green-500/70 backdrop-blur-sm rounded-full text-white">
+                            <Database className="h-3 w-3" />
+                            <span className="text-xs">Firebase</span>
+                        </div>
                     </div>
 
                     {isAdmin ? (
@@ -844,43 +934,11 @@ export default function Home() {
                                     </p>
                                 </div>
 
-                                {/* Setări sincronizare */}
                                 <div className="mt-6 p-4 bg-white/10 rounded-lg border border-white/20">
-                                    <h3 className="text-white font-medium mb-2">Setări Sincronizare</h3>
-                                    <div className="space-y-3">
-                                        <div className="flex items-center justify-between">
-                                            <span className="text-white text-sm">Sincronizare automată:</span>
-                                            <button
-                                                onClick={toggleSync}
-                                                className={`px-2 py-1 rounded text-xs ${syncEnabled ? "bg-green-500" : "bg-red-500"}`}
-                                            >
-                                                {syncEnabled ? "Activă" : "Inactivă"}
-                                            </button>
-                                        </div>
-                                        <div className="space-y-2">
-                                            <p className="text-white text-sm">Interval de sincronizare:</p>
-                                            <div className="flex gap-2">
-                                                <button
-                                                    onClick={() => changeSyncInterval(2000)}
-                                                    className={`px-2 py-1 rounded text-xs ${syncInterval === 2000 ? "bg-blue-500" : "bg-white/20"}`}
-                                                >
-                                                    2s
-                                                </button>
-                                                <button
-                                                    onClick={() => changeSyncInterval(5000)}
-                                                    className={`px-2 py-1 rounded text-xs ${syncInterval === 5000 ? "bg-blue-500" : "bg-white/20"}`}
-                                                >
-                                                    5s
-                                                </button>
-                                                <button
-                                                    onClick={() => changeSyncInterval(10000)}
-                                                    className={`px-2 py-1 rounded text-xs ${syncInterval === 10000 ? "bg-blue-500" : "bg-white/20"}`}
-                                                >
-                                                    10s
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
+                                    <h3 className="text-white font-medium mb-2">Firebase Firestore</h3>
+                                    <p className="text-white/80 text-sm">
+                                        Datele sunt sincronizate în timp real între toate dispozitivele folosind Firebase Firestore.
+                                    </p>
                                 </div>
 
                                 <div className="mt-6 space-y-2">
