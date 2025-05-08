@@ -20,6 +20,7 @@ import {
     Upload,
     Download,
     RefreshCw,
+    Globe,
 } from "lucide-react"
 
 // Definim tipurile pentru datele noastre
@@ -52,12 +53,11 @@ type TimeSlot = {
     parentId: string
 }
 
-// Definim tipul pentru mesajele de sincronizare
-type SyncMessage = {
-    type: "update" | "request"
-    events?: Event[]
-    timestamp: string
-    sessionId: string
+// Chei pentru localStorage
+const STORAGE_KEYS = {
+    EVENTS: "calendarEvents",
+    LAST_UPDATE: "calendarLastUpdate",
+    SYNC_COUNTER: "calendarSyncCounter",
 }
 
 export default function Home() {
@@ -76,12 +76,14 @@ export default function Home() {
     const [lastUpdateTime, setLastUpdateTime] = useState<string>(new Date().toISOString())
     const [syncStatus, setSyncStatus] = useState<"synced" | "syncing" | "error">("synced")
     const [sessionId] = useState(() => Math.random().toString(36).substring(2, 15))
-
-    // Referință pentru canalul de comunicare
-    const broadcastChannelRef = useRef<BroadcastChannel | null>(null)
+    const [syncEnabled, setSyncEnabled] = useState(true)
+    const [syncInterval, setSyncInterval] = useState(5000) // 5 secunde implicit
 
     // Referință pentru intervalul de polling
     const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
+
+    // Referință pentru a ține minte ultima dată când am verificat actualizările
+    const lastCheckRef = useRef<string>(new Date().toISOString())
 
     // Booking form state
     const [bookingForm, setBookingForm] = useState({
@@ -140,67 +142,33 @@ export default function Home() {
     // Admin password - in a real app, this would be handled securely on the server
     const ADMIN_PASSWORD = "admin123"
 
-    // Inițializăm canalul de comunicare și încărcăm evenimentele la încărcarea paginii
+    // Inițializăm polling-ul și încărcăm evenimentele la încărcarea paginii
     useEffect(() => {
-        // Inițializăm canalul de comunicare
-        if (typeof window !== "undefined" && "BroadcastChannel" in window) {
-            broadcastChannelRef.current = new BroadcastChannel("calendar_sync")
-
-            // Ascultăm pentru mesaje de la alte ferestre
-            broadcastChannelRef.current.onmessage = (event) => {
-                const message = event.data as SyncMessage
-
-                // Ignorăm mesajele de la aceeași sesiune
-                if (message.sessionId === sessionId) return
-
-                if (message.type === "update" && message.events) {
-                    // Actualizăm evenimentele locale dacă timestamp-ul este mai recent
-                    if (message.timestamp > lastUpdateTime) {
-                        setEvents(message.events)
-                        setLastUpdateTime(message.timestamp)
-                        setSyncStatus("synced")
-                    }
-                } else if (message.type === "request") {
-                    // Răspundem cu evenimentele noastre
-                    broadcastChannelRef.current?.postMessage({
-                        type: "update",
-                        events: events,
-                        timestamp: lastUpdateTime,
-                        sessionId: sessionId,
-                    })
-                }
-            }
-
-            // Solicităm evenimentele de la alte ferestre
-            broadcastChannelRef.current.postMessage({
-                type: "request",
-                timestamp: new Date().toISOString(),
-                sessionId: sessionId,
-            })
-        }
-
         // Încărcăm evenimentele din localStorage
         loadEvents()
         setIsLoaded(true)
 
+        // Pornim polling-ul
+        startPolling()
+
+        // Adăugăm un event listener pentru storage events (când alte tab-uri modifică localStorage)
+        window.addEventListener("storage", handleStorageChange)
+
         // Curățăm la demontarea componentei
         return () => {
-            if (broadcastChannelRef.current) {
-                broadcastChannelRef.current.close()
-            }
-
             if (pollingIntervalRef.current) {
                 clearInterval(pollingIntervalRef.current)
             }
+            window.removeEventListener("storage", handleStorageChange)
         }
     }, [])
 
-    // Salvăm evenimentele în localStorage și notificăm alte ferestre când se schimbă
+    // Actualizăm polling-ul când se schimbă intervalul
     useEffect(() => {
-        if (events.length > 0 && isLoaded) {
-            saveEvents()
+        if (syncEnabled) {
+            startPolling()
         }
-    }, [events])
+    }, [syncInterval, syncEnabled])
 
     // Generate available slots when an admin-available event is clicked
     useEffect(() => {
@@ -209,12 +177,58 @@ export default function Home() {
         }
     }, [selectedEvent, isAdmin])
 
+    // Handler pentru storage events (când alte tab-uri modifică localStorage)
+    const handleStorageChange = (event: StorageEvent) => {
+        if (event.key === STORAGE_KEYS.EVENTS || event.key === STORAGE_KEYS.LAST_UPDATE) {
+            // Verificăm dacă datele s-au schimbat
+            const storedLastUpdate = localStorage.getItem(STORAGE_KEYS.LAST_UPDATE)
+
+            if (storedLastUpdate && storedLastUpdate !== lastUpdateTime) {
+                setSyncStatus("syncing")
+                loadEvents()
+            }
+        }
+    }
+
+    // Funcție pentru a porni polling-ul
+    const startPolling = () => {
+        // Curățăm intervalul existent dacă există
+        if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current)
+        }
+
+        // Dacă sincronizarea este dezactivată, nu pornim polling-ul
+        if (!syncEnabled) return
+
+        // Pornim un nou interval
+        pollingIntervalRef.current = setInterval(checkForUpdates, syncInterval)
+    }
+
+    // Funcție pentru a verifica dacă există actualizări
+    const checkForUpdates = () => {
+        if (!syncEnabled) return
+
+        try {
+            const storedLastUpdate = localStorage.getItem(STORAGE_KEYS.LAST_UPDATE)
+
+            // Dacă există o actualizare mai recentă decât ultima noastră verificare
+            if (storedLastUpdate && storedLastUpdate !== lastCheckRef.current) {
+                setSyncStatus("syncing")
+                loadEvents()
+                lastCheckRef.current = storedLastUpdate
+            }
+        } catch (error) {
+            console.error("Error checking for updates:", error)
+            setSyncStatus("error")
+        }
+    }
+
     // Încărcăm evenimentele din localStorage
     const loadEvents = () => {
         setIsDataLoading(true)
         try {
-            const savedEvents = localStorage.getItem("calendarEvents")
-            const savedTimestamp = localStorage.getItem("calendarLastUpdate")
+            const savedEvents = localStorage.getItem(STORAGE_KEYS.EVENTS)
+            const savedTimestamp = localStorage.getItem(STORAGE_KEYS.LAST_UPDATE)
 
             if (savedEvents) {
                 const parsedEvents = JSON.parse(savedEvents) as Event[]
@@ -223,6 +237,7 @@ export default function Home() {
 
             if (savedTimestamp) {
                 setLastUpdateTime(savedTimestamp)
+                lastCheckRef.current = savedTimestamp
             }
 
             setSyncStatus("synced")
@@ -234,27 +249,22 @@ export default function Home() {
         }
     }
 
-    // Salvăm evenimentele în localStorage și notificăm alte ferestre
-    const saveEvents = () => {
+    // Salvăm evenimentele în localStorage
+    const saveEvents = (eventsToSave: Event[] = events) => {
         try {
             const timestamp = new Date().toISOString()
 
+            // Incrementăm contorul de sincronizare
+            const currentCounter = Number.parseInt(localStorage.getItem(STORAGE_KEYS.SYNC_COUNTER) || "0")
+            localStorage.setItem(STORAGE_KEYS.SYNC_COUNTER, (currentCounter + 1).toString())
+
             // Salvăm în localStorage
-            localStorage.setItem("calendarEvents", JSON.stringify(events))
-            localStorage.setItem("calendarLastUpdate", timestamp)
+            localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(eventsToSave))
+            localStorage.setItem(STORAGE_KEYS.LAST_UPDATE, timestamp)
 
             // Actualizăm timestamp-ul local
             setLastUpdateTime(timestamp)
-
-            // Notificăm alte ferestre
-            if (broadcastChannelRef.current) {
-                broadcastChannelRef.current.postMessage({
-                    type: "update",
-                    events: events,
-                    timestamp: timestamp,
-                    sessionId: sessionId,
-                })
-            }
+            lastCheckRef.current = timestamp
 
             setSyncStatus("synced")
         } catch (error) {
@@ -267,15 +277,22 @@ export default function Home() {
     const forceRefresh = () => {
         setSyncStatus("syncing")
         loadEvents()
+    }
 
-        // Solicităm actualizări de la alte ferestre
-        if (broadcastChannelRef.current) {
-            broadcastChannelRef.current.postMessage({
-                type: "request",
-                timestamp: new Date().toISOString(),
-                sessionId: sessionId,
-            })
+    // Activăm/dezactivăm sincronizarea
+    const toggleSync = () => {
+        setSyncEnabled(!syncEnabled)
+        if (!syncEnabled) {
+            startPolling()
+        } else if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current)
         }
+    }
+
+    // Schimbăm intervalul de sincronizare
+    const changeSyncInterval = (newInterval: number) => {
+        setSyncInterval(newInterval)
+        startPolling()
     }
 
     // Export events to JSON file
@@ -312,7 +329,7 @@ export default function Home() {
                 }))
 
                 setEvents(processedEvents)
-                saveEvents() // Salvăm și notificăm alte ferestre
+                saveEvents(processedEvents) // Salvăm și notificăm alte ferestre
 
                 alert("Evenimentele au fost importate cu succes!")
             } catch (error) {
@@ -415,7 +432,10 @@ export default function Home() {
             lastUpdated: timestamp,
         }
 
-        setEvents([...events, eventToAdd])
+        const updatedEvents = [...events, eventToAdd]
+        setEvents(updatedEvents)
+        saveEvents(updatedEvents)
+
         setShowAddEventModal(false)
 
         // Reset form
@@ -436,6 +456,8 @@ export default function Home() {
 
         const updatedEvents = events.filter((event) => event.id !== eventId)
         setEvents(updatedEvents)
+        saveEvents(updatedEvents)
+
         setSelectedEvent(null)
     }
 
@@ -482,6 +504,7 @@ export default function Home() {
         // Add the booked event
         const updatedEvents = [...events, bookedEvent]
         setEvents(updatedEvents)
+        saveEvents(updatedEvents)
 
         // Reset and close
         setShowBookingModal(false)
@@ -736,6 +759,16 @@ export default function Home() {
                                 {syncStatus === "error" && "Eroare sincronizare"}
                             </span>
                         </button>
+
+                        {/* Sync Toggle */}
+                        <button
+                            onClick={toggleSync}
+                            className={`flex items-center gap-1 px-3 py-1 ${syncEnabled ? "bg-green-500/70" : "bg-red-500/70"} backdrop-blur-sm rounded-full text-white hover:bg-opacity-80 transition-colors`}
+                            title={syncEnabled ? "Dezactivează sincronizarea" : "Activează sincronizarea"}
+                        >
+                            <Globe className="h-3 w-3" />
+                            <span className="text-xs">{syncEnabled ? "Sincronizare activă" : "Sincronizare inactivă"}</span>
+                        </button>
                     </div>
 
                     {isAdmin ? (
@@ -809,6 +842,45 @@ export default function Home() {
                                         Adaugă intervale mari de disponibilitate. Clienții vor putea selecta sloturi de o oră din aceste
                                         intervale.
                                     </p>
+                                </div>
+
+                                {/* Setări sincronizare */}
+                                <div className="mt-6 p-4 bg-white/10 rounded-lg border border-white/20">
+                                    <h3 className="text-white font-medium mb-2">Setări Sincronizare</h3>
+                                    <div className="space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-white text-sm">Sincronizare automată:</span>
+                                            <button
+                                                onClick={toggleSync}
+                                                className={`px-2 py-1 rounded text-xs ${syncEnabled ? "bg-green-500" : "bg-red-500"}`}
+                                            >
+                                                {syncEnabled ? "Activă" : "Inactivă"}
+                                            </button>
+                                        </div>
+                                        <div className="space-y-2">
+                                            <p className="text-white text-sm">Interval de sincronizare:</p>
+                                            <div className="flex gap-2">
+                                                <button
+                                                    onClick={() => changeSyncInterval(2000)}
+                                                    className={`px-2 py-1 rounded text-xs ${syncInterval === 2000 ? "bg-blue-500" : "bg-white/20"}`}
+                                                >
+                                                    2s
+                                                </button>
+                                                <button
+                                                    onClick={() => changeSyncInterval(5000)}
+                                                    className={`px-2 py-1 rounded text-xs ${syncInterval === 5000 ? "bg-blue-500" : "bg-white/20"}`}
+                                                >
+                                                    5s
+                                                </button>
+                                                <button
+                                                    onClick={() => changeSyncInterval(10000)}
+                                                    className={`px-2 py-1 rounded text-xs ${syncInterval === 10000 ? "bg-blue-500" : "bg-white/20"}`}
+                                                >
+                                                    10s
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
 
                                 <div className="mt-6 space-y-2">
