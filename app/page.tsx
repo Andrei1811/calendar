@@ -22,11 +22,6 @@ import {
     RefreshCw,
     Database,
 } from "lucide-react"
-// Alternativ, putem modifica importul pentru a folosi calea relativă corectă
-// Înlocuiește:
-// import { db } from "./firebase"
-//
-// Cu:
 import { db } from "./firebase"
 import { collection, addDoc, deleteDoc, doc, getDocs, query, orderBy, onSnapshot } from "firebase/firestore"
 
@@ -125,6 +120,119 @@ export default function Home() {
     // Admin password - in a real app, this would be handled securely on the server
     const ADMIN_PASSWORD = "admin123"
 
+    // Check if a date is today - MUTATĂ AICI ÎNAINTE DE A FI UTILIZATĂ
+    const isToday = (date: Date) => {
+        const today = new Date()
+        return (
+            date.getDate() === today.getDate() &&
+            date.getMonth() === today.getMonth() &&
+            date.getFullYear() === today.getFullYear()
+        )
+    }
+
+    // Get week days based on current date
+    const getWeekDays = () => {
+        const days = []
+        const dayNames = ["DUM", "LUN", "MAR", "MIE", "JOI", "VIN", "SÂM"]
+
+        // Find the first day of the week (Sunday)
+        const firstDayOfWeek = new Date(currentDate)
+        const day = currentDate.getDay()
+        firstDayOfWeek.setDate(currentDate.getDate() - day)
+
+        // Generate 7 days starting from Sunday
+        for (let i = 0; i < 7; i++) {
+            const date = new Date(firstDayOfWeek)
+            date.setDate(firstDayOfWeek.getDate() + i)
+            days.push({
+                name: dayNames[i],
+                date: date,
+                dateNum: date.getDate(),
+                month: date.getMonth(),
+                year: date.getFullYear(),
+                isToday: isToday(date),
+            })
+        }
+
+        return days
+    }
+
+    // Get month days based on current date
+    const getMonthDays = () => {
+        const days = []
+        const dayNames = ["D", "L", "M", "M", "J", "V", "S"]
+
+        // Get first day of the month
+        const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1)
+        const lastDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0)
+
+        // Get the day of the week for the first day (0 = Sunday, 1 = Monday, etc.)
+        const firstDayOfWeek = firstDayOfMonth.getDay()
+
+        // Add days from previous month to fill the first week
+        const prevMonthLastDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), 0).getDate()
+        for (let i = firstDayOfWeek - 1; i >= 0; i--) {
+            const date = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, prevMonthLastDay - i)
+            days.push({
+                name: dayNames[date.getDay()],
+                date: date,
+                dateNum: date.getDate(),
+                month: date.getMonth(),
+                year: date.getFullYear(),
+                isCurrentMonth: false,
+                isToday: isToday(date),
+            })
+        }
+
+        // Add days of current month
+        for (let i = 1; i <= lastDayOfMonth.getDate(); i++) {
+            const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), i)
+            days.push({
+                name: dayNames[date.getDay()],
+                date: date,
+                dateNum: i,
+                month: date.getMonth(),
+                year: date.getFullYear(),
+                isCurrentMonth: true,
+                isToday: isToday(date),
+            })
+        }
+
+        // Add days from next month to complete the grid (6 rows x 7 days = 42 cells)
+        const remainingDays = 42 - days.length
+        for (let i = 1; i <= remainingDays; i++) {
+            const date = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, i)
+            days.push({
+                name: dayNames[date.getDay()],
+                date: date,
+                dateNum: i,
+                month: date.getMonth(),
+                year: date.getFullYear(),
+                isCurrentMonth: false,
+                isToday: isToday(date),
+            })
+        }
+
+        return days
+    }
+
+    const [weekDays, setWeekDays] = useState(getWeekDays())
+    const [monthDays, setMonthDays] = useState(getMonthDays())
+
+    // Helper function to determine if an event should be displayed
+    const shouldDisplayEvent = (event: Event, date: Date): boolean => {
+        const eventStartDate = new Date(event.startDate)
+        const eventEndDate = new Date(event.endDate)
+
+        // Reset hours to compare only dates
+        const compareDate = new Date(date)
+        eventStartDate.setHours(0, 0, 0, 0)
+        eventEndDate.setHours(0, 0, 0, 0)
+        compareDate.setHours(0, 0, 0, 0)
+
+        return compareDate >= eventStartDate && compareDate <= eventEndDate
+    }
+
     // Inițializăm polling-ul și încărcăm evenimentele la încărcarea paginii
     useEffect(() => {
         // Încărcăm evenimentele din Firestore și setăm un listener pentru actualizări
@@ -222,6 +330,12 @@ export default function Home() {
             generateAvailableSlots(selectedEvent)
         }
     }, [selectedEvent, isAdmin])
+
+    // Actualizăm zilele săptămânii și lunii când se schimbă data curentă
+    useEffect(() => {
+        setWeekDays(getWeekDays())
+        setMonthDays(getMonthDays())
+    }, [currentDate])
 
     // Handler pentru storage events (când alte tab-uri modifică localStorage)
     const handleStorageChange = (event: StorageEvent) => {
@@ -699,102 +813,6 @@ export default function Home() {
         setCurrentDate(new Date())
     }
 
-    // Get week days based on current date
-    const getWeekDays = () => {
-        const days = []
-        const dayNames = ["DUM", "LUN", "MAR", "MIE", "JOI", "VIN", "SÂM"]
-
-        // Find the first day of the week (Sunday)
-        const firstDayOfWeek = new Date(currentDate)
-        const day = currentDate.getDay()
-        firstDayOfWeek.setDate(currentDate.getDate() - day)
-
-        // Generate 7 days starting from Sunday
-        for (let i = 0; i < 7; i++) {
-            const date = new Date(firstDayOfWeek)
-            date.setDate(firstDayOfWeek.getDate() + i)
-            days.push({
-                name: dayNames[i],
-                date: date,
-                dateNum: date.getDate(),
-                month: date.getMonth(),
-                year: date.getFullYear(),
-                isToday: isToday(date),
-            })
-        }
-
-        return days
-    }
-
-    // Get month days based on current date
-    const getMonthDays = () => {
-        const days = []
-        const dayNames = ["D", "L", "M", "M", "J", "V", "S"]
-
-        // Get first day of the month
-        const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1)
-        const lastDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0)
-
-        // Get the day of the week for the first day (0 = Sunday, 1 = Monday, etc.)
-        const firstDayOfWeek = firstDayOfMonth.getDay()
-
-        // Add days from previous month to fill the first week
-        const prevMonthLastDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), 0).getDate()
-        for (let i = firstDayOfWeek - 1; i >= 0; i--) {
-            const date = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, prevMonthLastDay - i)
-            days.push({
-                name: dayNames[date.getDay()],
-                date: date,
-                dateNum: date.getDate(),
-                month: date.getMonth(),
-                year: date.getFullYear(),
-                isCurrentMonth: false,
-                isToday: isToday(date),
-            })
-        }
-
-        // Add days of current month
-        for (let i = 1; i <= lastDayOfMonth.getDate(); i++) {
-            const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), i)
-            days.push({
-                name: dayNames[date.getDay()],
-                date: date,
-                dateNum: i,
-                month: date.getMonth(),
-                year: date.getFullYear(),
-                isCurrentMonth: true,
-                isToday: isToday(date),
-            })
-        }
-
-        // Add days from next month to complete the grid (6 rows x 7 days = 42 cells)
-        const remainingDays = 42 - days.length
-        for (let i = 1; i <= remainingDays; i++) {
-            const date = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, i)
-            days.push({
-                name: dayNames[date.getDay()],
-                date: date,
-                dateNum: i,
-                month: date.getMonth(),
-                year: date.getFullYear(),
-                isCurrentMonth: false,
-                isToday: isToday(date),
-            })
-        }
-
-        return days
-    }
-
-    // Check if a date is today
-    const isToday = (date: Date) => {
-        const today = new Date()
-        return (
-            date.getDate() === today.getDate() &&
-            date.getMonth() === today.getMonth() &&
-            date.getFullYear() === today.getFullYear()
-        )
-    }
-
     // Format date for display
     const formatDate = (date: Date) => {
         const options: Intl.DateTimeFormatOptions = { month: "long", day: "numeric", year: "numeric" }
@@ -811,33 +829,18 @@ export default function Home() {
     const timeSlots = Array.from({ length: 9 }, (_, i) => i + 8) // 8 AM to 4 PM
 
     // Helper function to calculate event position and height
-    const calculateEventStyle = (startTime: string, endTime: string) => {
+    const calculateEventStyle = (startTime: string, endTime: string, eventType: string) => {
         const start = Number.parseInt(startTime.split(":")[0]) + Number.parseInt(startTime.split(":")[1]) / 60
         const end = Number.parseInt(endTime.split(":")[0]) + Number.parseInt(endTime.split(":")[1]) / 60
         const top = (start - 8) * 80 // 80px per hour
         const height = (end - start) * 80
-        return { top: `${top}px`, height: `${height}px` }
+
+        // Adăugăm z-index diferit în funcție de tipul evenimentului
+        // Programările (booked) vor fi deasupra intervalelor disponibile (admin-available)
+        const zIndex = eventType === "booked" ? 10 : 5
+
+        return { top: `${top}px`, height: `${height}px`, zIndex }
     }
-
-    // Check if an event should be displayed on a specific date
-    const shouldDisplayEvent = (event: Event, date: Date) => {
-        const eventStartDate = new Date(event.startDate)
-        const eventEndDate = new Date(event.endDate)
-
-        // Reset hours to compare only dates
-        const compareDate = new Date(date)
-        eventStartDate.setHours(0, 0, 0, 0)
-        eventEndDate.setHours(0, 0, 0, 0)
-        compareDate.setHours(0, 0, 0, 0)
-
-        return compareDate >= eventStartDate && compareDate <= eventEndDate
-    }
-
-    // Get the week days for the current view
-    const weekDays = getWeekDays()
-
-    // Get the month days for the current view
-    const monthDays = getMonthDays()
 
     // Get event icon based on type
     const getEventIcon = (type: string) => {
@@ -849,6 +852,16 @@ export default function Home() {
             default:
                 return <Calendar className="h-3 w-3 mr-1" />
         }
+    }
+
+    // Get event title based on type and user role
+    const getEventTitle = (event: Event) => {
+        if (event.type === "booked") {
+            // Pentru programări, afișăm titlul complet doar pentru admin
+            return isAdmin ? event.title : "Programare ocupată"
+        }
+        // Pentru alte tipuri de evenimente, afișăm titlul normal
+        return event.title
     }
 
     // Get events for a specific day in month view
@@ -888,23 +901,23 @@ export default function Home() {
 
             {/* Navigation */}
             <header
-                className={`absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-8 py-6 opacity-0 ${isLoaded ? "animate-fade-in" : ""}`}
+                className={`absolute top-0 left-0 right-0 z-10 flex flex-col sm:flex-row items-center justify-between px-4 sm:px-8 py-4 sm:py-6 opacity-0 ${isLoaded ? "animate-fade-in" : ""}`}
                 style={{ animationDelay: "0.2s" }}
             >
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 mb-2 sm:mb-0">
                     <Menu className="h-6 w-6 text-white" />
-                    <span className="text-2xl font-semibold text-white drop-shadow-lg">Sistem de Programări</span>
+                    <span className="text-xl sm:text-2xl font-semibold text-white drop-shadow-lg">Sistem de Programări</span>
                 </div>
 
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2 sm:gap-4">
                     {/* Sync Status Indicator */}
-                    <div className="flex items-center gap-2 mr-4">
+                    <div className="flex items-center gap-2 mr-2 sm:mr-4">
                         <button
                             onClick={forceRefresh}
-                            className="flex items-center gap-1 px-3 py-1 bg-white/10 backdrop-blur-sm rounded-full text-white hover:bg-white/20 transition-colors"
+                            className="flex items-center gap-1 px-2 sm:px-3 py-1 bg-white/10 backdrop-blur-sm rounded-full text-white hover:bg-white/20 transition-colors"
                         >
                             <RefreshCw className={`h-3 w-3 ${syncStatus === "syncing" ? "animate-spin" : ""}`} />
-                            <span className="text-xs">
+                            <span className="text-xs hidden sm:inline">
                                 {syncStatus === "synced" && "Sincronizat"}
                                 {syncStatus === "syncing" && "Sincronizare..."}
                                 {syncStatus === "error" && "Eroare sincronizare"}
@@ -912,37 +925,37 @@ export default function Home() {
                         </button>
 
                         {/* Firebase Indicator */}
-                        <div className="flex items-center gap-1 px-3 py-1 bg-green-500/70 backdrop-blur-sm rounded-full text-white">
+                        <div className="flex items-center gap-1 px-2 sm:px-3 py-1 bg-green-500/70 backdrop-blur-sm rounded-full text-white">
                             <Database className="h-3 w-3" />
-                            <span className="text-xs">Firebase</span>
+                            <span className="text-xs hidden sm:inline">Firebase</span>
                         </div>
                     </div>
 
                     {isAdmin ? (
                         <button
                             onClick={handleLogout}
-                            className="flex items-center gap-2 px-4 py-2 bg-white/20 backdrop-blur-sm rounded-full text-white hover:bg-white/30 transition-colors"
+                            className="flex items-center gap-1 sm:gap-2 px-3 sm:px-4 py-1 sm:py-2 bg-white/20 backdrop-blur-sm rounded-full text-white hover:bg-white/30 transition-colors"
                         >
                             <LogOut className="h-4 w-4" />
-                            <span>Ieșire Admin</span>
+                            <span className="text-sm">Ieșire</span>
                         </button>
                     ) : (
                         <button
                             onClick={() => setShowLoginModal(true)}
-                            className="flex items-center gap-2 px-4 py-2 bg-white/20 backdrop-blur-sm rounded-full text-white hover:bg-white/30 transition-colors"
+                            className="flex items-center gap-1 sm:gap-2 px-3 sm:px-4 py-1 sm:py-2 bg-white/20 backdrop-blur-sm rounded-full text-white hover:bg-white/30 transition-colors"
                         >
                             <LogIn className="h-4 w-4" />
-                            <span>Admin</span>
+                            <span className="text-sm">Admin</span>
                         </button>
                     )}
                 </div>
             </header>
 
             {/* Main Content */}
-            <main className="relative h-screen w-full pt-20 flex">
+            <main className="relative h-screen w-full pt-20 flex flex-col md:flex-row">
                 {/* Simplified Sidebar */}
                 <div
-                    className={`w-64 h-full bg-white/10 backdrop-blur-lg p-4 shadow-xl border-r border-white/20 rounded-tr-3xl opacity-0 ${isLoaded ? "animate-fade-in" : ""} flex flex-col justify-between`}
+                    className={`w-full md:w-64 h-auto md:h-full bg-white/10 backdrop-blur-lg p-4 shadow-xl border-b md:border-r border-white/20 md:rounded-tr-3xl opacity-0 ${isLoaded ? "animate-fade-in" : ""} flex flex-col justify-between`}
                     style={{ animationDelay: "0.4s" }}
                 >
                     <div>
@@ -1037,20 +1050,23 @@ export default function Home() {
                     style={{ animationDelay: "0.6s" }}
                 >
                     {/* Calendar Controls */}
-                    <div className="flex items-center justify-between p-4 border-b border-white/20">
-                        <div className="flex items-center gap-4">
-                            <button className="px-4 py-2 text-white bg-blue-500 rounded-md" onClick={goToToday}>
+                    <div className="flex flex-col sm:flex-row items-center justify-between p-2 sm:p-4 border-b border-white/20">
+                        <div className="flex items-center gap-2 sm:gap-4 mb-2 sm:mb-0">
+                            <button
+                                className="px-2 sm:px-4 py-1 sm:py-2 text-white bg-blue-500 rounded-md text-sm"
+                                onClick={goToToday}
+                            >
                                 Astăzi
                             </button>
                             <div className="flex">
-                                <button className="p-2 text-white hover:bg-white/10 rounded-l-md" onClick={goToPrevPeriod}>
-                                    <ChevronLeft className="h-5 w-5" />
+                                <button className="p-1 sm:p-2 text-white hover:bg-white/10 rounded-l-md" onClick={goToPrevPeriod}>
+                                    <ChevronLeft className="h-4 sm:h-5 w-4 sm:w-5" />
                                 </button>
-                                <button className="p-2 text-white hover:bg-white/10 rounded-r-md" onClick={goToNextPeriod}>
-                                    <ChevronRight className="h-5 w-5" />
+                                <button className="p-1 sm:p-2 text-white hover:bg-white/10 rounded-r-md" onClick={goToNextPeriod}>
+                                    <ChevronRight className="h-4 sm:h-5 w-4 sm:w-5" />
                                 </button>
                             </div>
-                            <h2 className="text-xl font-semibold text-white">
+                            <h2 className="text-base sm:text-xl font-semibold text-white">
                                 {currentView === "week"
                                     ? `${formatDate(weekDays[0].date)} - ${formatDate(weekDays[6].date)}`
                                     : formatMonth(currentDate)}
@@ -1060,13 +1076,13 @@ export default function Home() {
                         <div className="flex items-center gap-2 rounded-md p-1">
                             <button
                                 onClick={() => setCurrentView("week")}
-                                className={`px-3 py-1 rounded ${currentView === "week" ? "bg-white/20" : ""} text-white text-sm`}
+                                className={`px-2 sm:px-3 py-1 rounded ${currentView === "week" ? "bg-white/20" : ""} text-white text-xs sm:text-sm`}
                             >
                                 Săptămână
                             </button>
                             <button
                                 onClick={() => setCurrentView("month")}
-                                className={`px-3 py-1 rounded ${currentView === "month" ? "bg-white/20" : ""} text-white text-sm`}
+                                className={`px-2 sm:px-3 py-1 rounded ${currentView === "month" ? "bg-white/20" : ""} text-white text-xs sm:text-sm`}
                             >
                                 Lună
                             </button>
@@ -1126,7 +1142,7 @@ export default function Home() {
                                             {events
                                                 .filter((event) => shouldDisplayEvent(event, day.date))
                                                 .map((event, i) => {
-                                                    const eventStyle = calculateEventStyle(event.startTime, event.endTime)
+                                                    const eventStyle = calculateEventStyle(event.startTime, event.endTime, event.type)
 
                                                     // Determine cursor based on event type and user role
                                                     let cursorClass = "cursor-pointer"
@@ -1151,7 +1167,7 @@ export default function Home() {
                                                         >
                                                             <div className="font-medium flex items-center">
                                                                 {getEventIcon(event.type)}
-                                                                {event.title}
+                                                                {getEventTitle(event)}
                                                             </div>
                                                             <div className="opacity-80 text-[10px] mt-1">{`${event.startTime} - ${event.endTime}`}</div>
                                                         </div>
@@ -1205,7 +1221,7 @@ export default function Home() {
                                                     >
                                                         <div className="flex items-center">
                                                             {getEventIcon(event.type)}
-                                                            <span className="truncate">{event.title}</span>
+                                                            <span className="truncate">{getEventTitle(event)}</span>
                                                         </div>
                                                     </div>
                                                 ))}
@@ -1260,7 +1276,7 @@ export default function Home() {
                     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
                         <div className={`${selectedEvent.color} p-6 rounded-lg shadow-xl max-w-md w-full mx-4`}>
                             <div className="flex justify-between items-start">
-                                <h3 className="text-2xl font-bold mb-4 text-white">{selectedEvent.title}</h3>
+                                <h3 className="text-2xl font-bold mb-4 text-white">{getEventTitle(selectedEvent)}</h3>
                                 {isAdmin && (
                                     <button
                                         className="text-white/80 hover:text-white"
