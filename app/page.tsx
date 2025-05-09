@@ -22,6 +22,11 @@ import {
     RefreshCw,
     Database,
 } from "lucide-react"
+// Alternativ, putem modifica importul pentru a folosi calea relativă corectă
+// Înlocuiește:
+// import { db } from "./firebase"
+//
+// Cu:
 import { db } from "./firebase"
 import { collection, addDoc, deleteDoc, doc, getDocs, query, orderBy, onSnapshot } from "firebase/firestore"
 
@@ -133,6 +138,7 @@ export default function Home() {
             eventsQuery,
             (snapshot) => {
                 const eventsData: Event[] = []
+
                 snapshot.forEach((doc) => {
                     const data = doc.data()
                     eventsData.push({
@@ -149,9 +155,36 @@ export default function Home() {
                         lastUpdated: data.lastUpdated,
                     })
                 })
+
+                // Sortăm evenimentele după dată pentru afișare consistentă
+                eventsData.sort((a, b) => {
+                    // Sortare primară după dată
+                    const dateA = new Date(a.startDate).getTime()
+                    const dateB = new Date(b.startDate).getTime()
+                    if (dateA !== dateB) return dateA - dateB
+
+                    // Sortare secundară după ora de început
+                    const timeA = Number.parseInt(a.startTime.split(":")[0])
+                    const timeB = Number.parseInt(b.startTime.split(":")[0])
+                    return timeA - timeB
+                })
+
                 setEvents(eventsData)
                 setIsDataLoading(false)
                 setSyncStatus("synced")
+
+                // Dacă există un eveniment selectat, actualizăm și detaliile acestuia
+                if (selectedEvent) {
+                    const updatedEvent = eventsData.find((e) => e.id === selectedEvent.id)
+                    if (updatedEvent) {
+                        setSelectedEvent(updatedEvent)
+                    }
+                }
+
+                // Dacă există un eveniment de tip admin-available selectat, regenerăm sloturile disponibile
+                if (selectedEvent && selectedEvent.type === "admin-available" && !isAdmin) {
+                    generateAvailableSlots(selectedEvent)
+                }
             },
             (error) => {
                 console.error("Error fetching events:", error)
@@ -464,7 +497,7 @@ export default function Home() {
         const startHour = Number.parseInt(availableBlock.startTime.split(":")[0])
         const endHour = Number.parseInt(availableBlock.endTime.split(":")[0])
 
-        // Check which slots are already booked
+        // Check which slots are already booked - îmbunătățim filtrarea
         const bookedSlots = events.filter(
             (event) => event.type === "booked" && event.startDate === availableBlock.startDate,
         )
@@ -473,8 +506,13 @@ export default function Home() {
             const startTime = `${hour.toString().padStart(2, "0")}:00`
             const endTime = `${(hour + 1).toString().padStart(2, "0")}:00`
 
-            // Check if this slot is already booked
-            const isBooked = bookedSlots.some((booking) => booking.startTime === startTime && booking.endTime === endTime)
+            // Check if this slot is already booked - verificare mai precisă
+            const isBooked = bookedSlots.some(
+                (booking) =>
+                    (booking.startTime === startTime && booking.endTime === endTime) ||
+                    (Number.parseInt(booking.startTime.split(":")[0]) <= hour &&
+                        Number.parseInt(booking.endTime.split(":")[0]) > hour),
+            )
 
             if (!isBooked) {
                 slots.push({
@@ -578,7 +616,7 @@ export default function Home() {
             const timestamp = new Date().toISOString()
 
             // Create a new booked event in Firestore
-            await addDoc(collection(db, EVENTS_COLLECTION), {
+            const newBooking = {
                 title: `Programare: ${bookingForm.firstName} ${bookingForm.lastName}`,
                 startTime: selectedSlot.startTime,
                 endTime: selectedSlot.endTime,
@@ -593,7 +631,10 @@ export default function Home() {
                 },
                 createdAt: timestamp,
                 lastUpdated: timestamp,
-            })
+            }
+
+            // Adăugăm evenimentul în Firestore
+            await addDoc(collection(db, EVENTS_COLLECTION), newBooking)
 
             // Reset and close
             setShowBookingModal(false)
@@ -817,6 +858,22 @@ export default function Home() {
 
     // File input reference for import
     const fileInputRef = React.createRef<HTMLInputElement>()
+
+    // Adaugă această funcție pentru a afișa un indicator pentru sloturile ocupate
+    const renderBookedIndicator = (day: Date) => {
+        const dayEvents = events.filter((event) => event.type === "booked" && shouldDisplayEvent(event, day))
+
+        if (dayEvents.length === 0) return null
+
+        return (
+            <div className="absolute top-1 right-1">
+                <div className="flex items-center">
+                    <div className="w-2 h-2 rounded-full bg-purple-500 mr-1"></div>
+                    <span className="text-xs text-white/70">{dayEvents.length}</span>
+                </div>
+            </div>
+        )
+    }
 
     return (
         <div className="relative min-h-screen w-full overflow-hidden">
@@ -1132,6 +1189,8 @@ export default function Home() {
                                             >
                                                 {day.dateNum}
                                             </div>
+
+                                            {renderBookedIndicator(day.date)}
 
                                             {/* Events for this day */}
                                             <div className="mt-1 space-y-1 max-h-[80px] overflow-y-auto">
